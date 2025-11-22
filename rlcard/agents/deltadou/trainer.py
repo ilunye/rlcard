@@ -138,8 +138,6 @@ class DeltaDouTrainer:
                  learning_rate=0.001,
                  value_loss_coef=1.0,
                  l2_reg_coef=1e-4,
-                 state_dim=790,
-                 num_actions=54,
                  num_residual_blocks=10,
                  base_channels=128,
                  device=None,
@@ -160,8 +158,8 @@ class DeltaDouTrainer:
             learning_rate (float): Learning rate
             value_loss_coef (float): Value loss coefficient
             l2_reg_coef (float): L2 regularization coefficient
-            state_dim (int): State dimension (790 for landlord, 901 for peasants)
-            num_actions (int): Number of actions
+            state_dim (int): Deprecated - state dimensions are read from env.state_shape
+            num_actions (int): Number of actions (default: None, will be read from env.num_actions)
             num_residual_blocks (int): Number of residual blocks in network
             base_channels (int): Base channels in network
             device: torch device
@@ -195,6 +193,9 @@ class DeltaDouTrainer:
         # Create environment
         self.env = rlcard.make('doudizhu', config={'seed': 42, 'allow_step_back': True})
         
+        # Get num_actions from environment (actual action space size: 27472)
+        num_actions = self.env.num_actions
+        
         # Create agents for each position (landlord, peasant_up, peasant_down)
         # Each position has its own network
         self.agents = []
@@ -202,7 +203,8 @@ class DeltaDouTrainer:
         self.trainers = []
         
         # State dimensions for each position: [landlord, peasant_up, peasant_down]
-        state_dims = [790, 901, 901]
+        # Read from env.state_shape: [[790], [901], [901]]
+        state_dims = [self.env.state_shape[0][0], self.env.state_shape[1][0], self.env.state_shape[2][0]]
         
         for pos in range(3):
             # Create network
@@ -217,7 +219,7 @@ class DeltaDouTrainer:
             
             # Create agent
             agent = DeltaDouAgent(
-                num_actions=num_actions,
+                num_actions=self.env.num_actions,
                 simulate_num=fpmcts_simulations,
                 state_dim=state_dims[pos],
                 num_residual_blocks=num_residual_blocks,

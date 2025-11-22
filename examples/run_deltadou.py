@@ -30,8 +30,6 @@ def train(args):
         learning_rate=args.learning_rate,
         value_loss_coef=args.value_loss_coef,
         l2_reg_coef=args.l2_reg_coef,
-        state_dim=args.state_dim,
-        num_actions=args.num_actions,
         num_residual_blocks=args.num_residual_blocks,
         base_channels=args.base_channels,
         device=device,
@@ -73,10 +71,6 @@ if __name__ == '__main__':
                         help='Temperature decay factor per episode (default: 0.95)')
     
     # Network parameters
-    parser.add_argument('--state_dim', type=int, default=790,
-                        help='State dimension (default: 790 for landlord)')
-    parser.add_argument('--num_actions', type=int, default=54,
-                        help='Number of actions (default: 54)')
     parser.add_argument('--num_residual_blocks', type=int, default=10,
                         help='Number of residual blocks (default: 10)')
     parser.add_argument('--base_channels', type=int, default=128,
