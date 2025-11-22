@@ -102,14 +102,7 @@ if __name__ == '__main__':
     parser.add_argument('--skip_bootstrap', action='store_true',
                         help='Skip bootstrap phase')
     
-    # CUDA
-    parser.add_argument('--cuda', type=str, default='0',
-                        help='CUDA device (default: "0")')
-    
     args = parser.parse_args()
-    
-    # Set CUDA
-    os.environ["CUDA_VISIBLE_DEVICES"] = args.cuda
     
     # Train
     train(args)
