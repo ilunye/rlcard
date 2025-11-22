@@ -58,6 +58,9 @@ class DeltaDouAgent(object):
         # Search trees for each player: {player_id: {info_state_hash: MCTSNode}}
         self.search_trees = defaultdict(dict)
         
+        # Track printed fallbacks to avoid spam
+        self._printed_fallbacks = set()
+        
         # Initialize Policy-Value Network
         self.policy_value_net = create_policy_value_net(
             state_dim=state_dim,
@@ -118,7 +121,14 @@ class DeltaDouAgent(object):
         # If state is from game.get_state(), we need to construct it
         # This is a simplified version - proper implementation would use env._extract_state
         # For now, return zero vector as fallback
+        self._print_fallback_once("[Fallback] _extract_state_vector: No 'obs' key in state, returning zero vector")
         return np.zeros(self.state_dim)
+    
+    def _print_fallback_once(self, message):
+        """Print fallback message only once"""
+        if message not in self._printed_fallbacks:
+            print(message)
+            self._printed_fallbacks.add(message)
     
     def _get_prior_policy(self, info_state, legal_actions):
         ''' Get prior policy π^i(u^i, a) from network
@@ -164,12 +174,14 @@ class DeltaDouAgent(object):
                 action_probs = {k: v / total_prob for k, v in action_probs.items()}
             else:
                 # Fallback to uniform
+                self._print_fallback_once("[Fallback] _get_prior_policy: Total probability is 0, using uniform distribution")
                 uniform_prob = 1.0 / len(legal_actions) if legal_actions else 0.0
                 action_probs = {action: uniform_prob for action in legal_actions}
             
             return action_probs
         except Exception as e:
             # Fallback to uniform if network fails
+            self._print_fallback_once(f"[Fallback] _get_prior_policy: Network failed with exception: {e}, using uniform distribution")
             num_legal = len(legal_actions)
             if num_legal == 0:
                 return {}
@@ -194,6 +206,7 @@ class DeltaDouAgent(object):
             return value
         except Exception as e:
             # Fallback to 0 if network fails
+            self._print_fallback_once(f"[Fallback] _get_value: Network failed with exception: {e}, returning 0.0")
             return 0.0
     
     def _puct_select(self, node, legal_actions):
@@ -490,6 +503,7 @@ class DeltaDouAgent(object):
         total_visits = sum(root_node.N[action] for action in legal_actions)
         if total_visits == 0:
             # Fallback to uniform
+            self._print_fallback_once("[Fallback] _get_action_probs_from_search: No visits in MCTS, using uniform distribution")
             uniform_prob = 1.0 / len(legal_actions)
             return {action: uniform_prob for action in legal_actions}
         
@@ -537,6 +551,7 @@ class DeltaDouAgent(object):
         # If we don't have game access, fallback to network policy
         if game is None:
             # Fallback: use policy network directly
+            self._print_fallback_once("[Fallback] step: No game access, using network policy directly")
             state_vector = self._extract_state_vector(state)
             legal_action_ids = list(state['legal_actions'].keys())
             legal_actions = state.get('raw_legal_actions', [])
@@ -574,6 +589,7 @@ class DeltaDouAgent(object):
             action_probs = self._search(info_state, perfect_info, player_id, game)
         except Exception as e:
             # If search fails, fallback to network policy
+            self._print_fallback_once(f"[Fallback] step: FPMCTS search failed: {e}, using network policy")
             state_vector = self._extract_state_vector(state)
             legal_action_ids = list(state['legal_actions'].keys())
             legal_actions = state.get('raw_legal_actions', [])
@@ -608,6 +624,7 @@ class DeltaDouAgent(object):
         
         if not action_probs:
             # Fallback to random
+            self._print_fallback_once("[Fallback] step: No action probabilities from search, using random action")
             return np.random.choice(legal_action_ids)
         
         # Convert action strings to IDs and select based on probabilities
@@ -626,6 +643,7 @@ class DeltaDouAgent(object):
                 return np.random.choice(action_ids, p=probs)
         
         # Fallback to random
+        self._print_fallback_once("[Fallback] step: Failed to convert action probabilities, using random action")
         return np.random.choice(legal_action_ids)
     
     def eval_step(self, state):
@@ -646,7 +664,8 @@ class DeltaDouAgent(object):
         if env is not None:
             try:
                 perfect_info = env.get_perfect_information()
-            except:
+            except Exception as e:
+                self._print_fallback_once(f"[Fallback] eval_step: Failed to get perfect information: {e}, using empty dict")
                 perfect_info = {}
         else:
             perfect_info = {}
@@ -671,6 +690,7 @@ class DeltaDouAgent(object):
         # If we don't have game access, use a simple fallback strategy
         if game is None:
             # Fallback: use uniform random or simple heuristic
+            self._print_fallback_once("[Fallback] eval_step: No game access, using random action")
             legal_action_ids = list(state['legal_actions'].keys())
             action_id = np.random.choice(legal_action_ids)
             
@@ -687,7 +707,7 @@ class DeltaDouAgent(object):
             action_probs = self._search(info_state, perfect_info, player_id, game)
         except Exception as e:
             # If search fails, fallback to random
-            print(f"FPMCTS search failed: {e}, using random action")
+            self._print_fallback_once(f"[Fallback] eval_step: FPMCTS search failed: {e}, using random action")
             legal_action_ids = list(state['legal_actions'].keys())
             action_id = np.random.choice(legal_action_ids)
             legal_actions = state.get('raw_legal_actions', [])
@@ -703,6 +723,7 @@ class DeltaDouAgent(object):
         
         if not action_probs:
             # Fallback to random
+            self._print_fallback_once("[Fallback] eval_step: No action probabilities from search, using random action")
             action_id = np.random.choice(legal_action_ids)
         else:
             # Convert action strings to IDs and select

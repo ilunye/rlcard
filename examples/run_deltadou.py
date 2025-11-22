@@ -43,7 +43,8 @@ def train(args):
     trainer.start(
         num_episodes=args.num_episodes,
         start_episode=args.start_episode,
-        skip_bootstrap=args.skip_bootstrap
+        skip_bootstrap=args.skip_bootstrap,
+        force_bootstrap=args.force_bootstrap
     )
 
 
@@ -101,6 +102,8 @@ if __name__ == '__main__':
                         help='Starting episode for resuming training (default: 0)')
     parser.add_argument('--skip_bootstrap', action='store_true',
                         help='Skip bootstrap phase')
+    parser.add_argument('--force_bootstrap', action='store_true',
+                        help='Force regenerate bootstrap data even if saved data exists')
     
     args = parser.parse_args()
     

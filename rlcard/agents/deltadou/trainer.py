@@ -11,6 +11,7 @@ Training Process:
 """
 
 import os
+import pickle
 import numpy as np
 import torch
 import torch.nn.functional as F
@@ -23,6 +24,7 @@ from rlcard.utils import set_seed, tournament
 from rlcard.agents.deltadou.deltadou_agent import DeltaDouAgent
 from rlcard.agents.deltadou.policy_value_net import PolicyValueNet, create_policy_value_net
 from rlcard.games.doudizhu.utils import ACTION_2_ID
+from rlcard.models.doudizhu_rule_models import DouDizhuRuleAgentV1
 
 
 class PolicyValueTrainer:
@@ -247,6 +249,15 @@ class DeltaDouTrainer:
         self.current_episode = 0
         self.current_temperature = temperature_start
         
+        # Track printed fallbacks to avoid spam
+        self._printed_fallbacks = set()
+        
+    def _print_fallback_once(self, message):
+        """Print fallback message only once"""
+        if message not in self._printed_fallbacks:
+            print(message)
+            self._printed_fallbacks.add(message)
+    
     def _get_temperature(self, episode):
         """Get temperature for current episode"""
         temp = self.temperature_start * (self.temperature_decay ** episode)
@@ -272,13 +283,14 @@ class DeltaDouTrainer:
         
         return np.random.choice(len(exp_probs), p=exp_probs)
     
-    def _collect_training_data(self, trajectories, payoffs):
+    def _collect_training_data(self, trajectories, payoffs, is_bootstrap=False):
         """
         Collect training data from self-play game
         
         Args:
             trajectories (list): Game trajectories for each player
             payoffs (list): Final payoffs for each player
+            is_bootstrap (bool): If True, use heuristic agent's action to build one-hot target policy
         """
         for player_id in range(3):
             player_trajectory = trajectories[player_id]
@@ -292,48 +304,77 @@ class DeltaDouTrainer:
                 # Get state vector
                 state_vector = self.agents[player_id]._extract_state_vector(state)
                 
-                # Get FPMCTS policy (if available) or use network policy
-                # For training data, we want the policy from FPMCTS
-                try:
-                    # Try to get FPMCTS policy
-                    env = state.get('_env', None)
-                    if env is not None and hasattr(env, 'game'):
-                        perfect_info = env.get_perfect_information()
-                        raw_obs = state.get('raw_obs', state)
-                        info_state = state
-                        game = env.game
-                        
-                        # Perform FPMCTS search
-                        action_probs = self.agents[player_id]._search(
-                            info_state, perfect_info, player_id, game
-                        )
-                        
-                        # Convert to action ID probabilities
-                        legal_actions = state.get('raw_legal_actions', [])
-                        target_policy = np.zeros(self.agents[player_id].num_actions)
-                        
-                        for action_str, prob in action_probs.items():
-                            if action_str in ACTION_2_ID:
-                                action_id = ACTION_2_ID[action_str]
-                                target_policy[action_id] = prob
-                    else:
-                        # Fallback to network policy
-                        legal_mask = np.zeros(self.agents[player_id].num_actions)
-                        legal_actions = state.get('raw_legal_actions', [])
-                        for action_str in legal_actions:
-                            if action_str in ACTION_2_ID:
-                                legal_mask[ACTION_2_ID[action_str]] = 1.0
-                        
-                        policy_probs, _ = self.networks[player_id].predict(state_vector, legal_mask)
-                        target_policy = policy_probs
-                except:
-                    # Fallback: uniform over legal actions
+                if is_bootstrap:
+                    # Bootstrap phase: Use heuristic agent's actual action to build one-hot target policy
                     target_policy = np.zeros(self.agents[player_id].num_actions)
-                    legal_action_ids = list(state['legal_actions'].keys())
-                    if legal_action_ids:
-                        uniform_prob = 1.0 / len(legal_action_ids)
-                        for aid in legal_action_ids:
-                            target_policy[aid] = uniform_prob
+                    
+                    # Convert action to action ID
+                    # action could be action ID (int) or action string (str) depending on use_raw
+                    if isinstance(action, str):
+                        # Action is a string (from raw agent), convert to action ID
+                        if action in ACTION_2_ID:
+                            action_id = ACTION_2_ID[action]
+                            target_policy[action_id] = 1.0
+                        else:
+                            # Fallback: skip this sample if action not found
+                            self._print_fallback_once(f"[Fallback] Player {player_id}: Action not found in ACTION_2_ID, skipping sample")
+                            continue
+                    elif isinstance(action, int):
+                        # Action is already an action ID
+                        if 0 <= action < self.agents[player_id].num_actions:
+                            target_policy[action] = 1.0
+                        else:
+                            # Fallback: skip this sample if action ID invalid
+                            self._print_fallback_once(f"[Fallback] Player {player_id}: Action ID invalid, skipping sample")
+                            continue
+                    else:
+                        # Unknown action type, skip
+                        self._print_fallback_once(f"[Fallback] Player {player_id}: Unknown action type, skipping sample")
+                        continue
+                else:
+                    # Self-play phase: Use FPMCTS policy (if available) or use network policy
+                    try:
+                        # Try to get FPMCTS policy
+                        env = state.get('_env', None)
+                        if env is not None and hasattr(env, 'game'):
+                            perfect_info = env.get_perfect_information()
+                            raw_obs = state.get('raw_obs', state)
+                            info_state = state
+                            game = env.game
+                            
+                            # Perform FPMCTS search
+                            action_probs = self.agents[player_id]._search(
+                                info_state, perfect_info, player_id, game
+                            )
+                            
+                            # Convert to action ID probabilities
+                            legal_actions = state.get('raw_legal_actions', [])
+                            target_policy = np.zeros(self.agents[player_id].num_actions)
+                            
+                            for action_str, prob in action_probs.items():
+                                if action_str in ACTION_2_ID:
+                                    action_id = ACTION_2_ID[action_str]
+                                    target_policy[action_id] = prob
+                        else:
+                            # Fallback to network policy
+                            self._print_fallback_once(f"[Fallback] Player {player_id}: No env/game access, using network policy")
+                            legal_mask = np.zeros(self.agents[player_id].num_actions)
+                            legal_actions = state.get('raw_legal_actions', [])
+                            for action_str in legal_actions:
+                                if action_str in ACTION_2_ID:
+                                    legal_mask[ACTION_2_ID[action_str]] = 1.0
+                            
+                            policy_probs, _ = self.networks[player_id].predict(state_vector, legal_mask)
+                            target_policy = policy_probs
+                    except Exception as e:
+                        # Fallback: uniform over legal actions
+                        self._print_fallback_once(f"[Fallback] Player {player_id}: Exception in policy generation: {e}, using uniform policy")
+                        target_policy = np.zeros(self.agents[player_id].num_actions)
+                        legal_action_ids = list(state['legal_actions'].keys())
+                        if legal_action_ids:
+                            uniform_prob = 1.0 / len(legal_action_ids)
+                            for aid in legal_action_ids:
+                                target_policy[aid] = uniform_prob
                 
                 # Store in reservoir
                 self.reservoir[player_id].append((state_vector, target_policy, payoff))
@@ -362,18 +403,24 @@ class DeltaDouTrainer:
         """Bootstrap phase: Use heuristic algorithm for initial training"""
         print("=" * 50)
         print("Bootstrap Phase: Generating initial training data")
+        print("Using DouDizhuRuleAgentV1 as heuristic algorithm")
         print("=" * 50)
         
-        # Use random agents as heuristic (can be replaced with better heuristic)
-        heuristic_agents = [RandomAgent(num_actions=self.env.num_actions) for _ in range(3)]
+        # Use DouDizhuRuleAgentV1 as heuristic (hand-coded rule-based agent)
+        heuristic_agents = [DouDizhuRuleAgentV1() for _ in range(3)]
         self.env.set_agents(heuristic_agents)
         
         # Collect games
         for game_idx in tqdm(range(self.bootstrap_games), desc="Bootstrap games"):
             trajectories, payoffs = self.env.run(is_training=True)
-            self._collect_training_data(trajectories, payoffs)
+            # Pass is_bootstrap=True to use heuristic agent's action for one-hot target policy
+            self._collect_training_data(trajectories, payoffs, is_bootstrap=True)
         
         print(f"Collected {sum(len(r) for r in self.reservoir)} training samples")
+        
+        # Save bootstrap training data
+        self.save_bootstrap_data()
+        print("Bootstrap training data saved!")
         
         # Train initial networks
         print("Training initial networks...")
@@ -396,7 +443,8 @@ class DeltaDouTrainer:
         for game_idx in tqdm(range(self.num_games_per_episode), 
                             desc=f"Episode {episode} - Self-play"):
             trajectories, payoffs = self.env.run(is_training=True)
-            self._collect_training_data(trajectories, payoffs)
+            # Pass is_bootstrap=False to use FPMCTS policy
+            self._collect_training_data(trajectories, payoffs, is_bootstrap=False)
         
         # Train networks
         print(f"Training networks for episode {episode}...")
@@ -461,7 +509,37 @@ class DeltaDouTrainer:
                 self.networks[player_id].load_state_dict(checkpoint['model_state_dict'])
                 print(f"Loaded model for player {player_id} from episode {episode}")
     
-    def start(self, num_episodes=100, start_episode=0, skip_bootstrap=False):
+    def save_bootstrap_data(self):
+        """Save bootstrap training data to disk"""
+        print('Start saving bootstrap data...')
+        bootstrap_data_path = os.path.join(self.save_dir, 'bootstrap_data.pkl')
+        # Convert deque to list for serialization
+        reservoir_data = [list(r) for r in self.reservoir]
+        with open(bootstrap_data_path, 'wb') as f:
+            pickle.dump(reservoir_data, f)
+        print(f"Bootstrap data saved to {bootstrap_data_path}")
+        print(f"  - Total samples: {sum(len(r) for r in reservoir_data)}")
+        for player_id, data in enumerate(reservoir_data):
+            print(f"  - Player {player_id}: {len(data)} samples")
+    
+    def load_bootstrap_data(self):
+        """Load bootstrap training data from disk"""
+        bootstrap_data_path = os.path.join(self.save_dir, 'bootstrap_data.pkl')
+        if os.path.exists(bootstrap_data_path):
+            print(f"Loading bootstrap data from {bootstrap_data_path}...")
+            with open(bootstrap_data_path, 'rb') as f:
+                reservoir_data = pickle.load(f)
+            # Convert list back to deque
+            for player_id in range(3):
+                self.reservoir[player_id].clear()
+                self.reservoir[player_id].extend(reservoir_data[player_id])
+            print(f"Loaded {sum(len(r) for r in self.reservoir)} training samples")
+            for player_id in range(3):
+                print(f"  - Player {player_id}: {len(self.reservoir[player_id])} samples")
+            return True
+        return False
+    
+    def start(self, num_episodes=100, start_episode=0, skip_bootstrap=False, force_bootstrap=False):
         """
         Start training
         
@@ -469,6 +547,7 @@ class DeltaDouTrainer:
             num_episodes (int): Number of self-play episodes
             start_episode (int): Starting episode (for resuming)
             skip_bootstrap (bool): Skip bootstrap phase if True
+            force_bootstrap (bool): Force regenerate bootstrap data even if saved data exists
         """
         print("=" * 50)
         print("DeltaDou Training Started")
@@ -481,7 +560,21 @@ class DeltaDouTrainer:
         
         # Bootstrap phase
         if not skip_bootstrap and start_episode == 0:
-            self.bootstrap_phase()
+            # Try to load existing bootstrap data first (unless forced to regenerate)
+            if not force_bootstrap and self.load_bootstrap_data():
+                print("Using existing bootstrap data, skipping data collection...")
+                # Train initial networks with loaded data
+                print("Training initial networks...")
+                for epoch in tqdm(range(100), desc="Initial training"):
+                    self._train_networks()
+                # Save initial models
+                self.save_models(episode=0)
+                print("Bootstrap phase completed (using saved data)!")
+            else:
+                # No saved data or forced regeneration, run full bootstrap
+                if force_bootstrap:
+                    print("Force regenerating bootstrap data...")
+                self.bootstrap_phase()
         elif start_episode > 0:
             self.load_models(start_episode - 1)
         
