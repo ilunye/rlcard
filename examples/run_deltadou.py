@@ -103,8 +103,8 @@ if __name__ == '__main__':
                         help='Skip bootstrap phase')
     
     # CUDA
-    parser.add_argument('--cuda', type=str, default='',
-                        help='CUDA device (default: "")')
+    parser.add_argument('--cuda', type=str, default='0',
+                        help='CUDA device (default: "0")')
     
     args = parser.parse_args()
     
