@@ -81,7 +81,7 @@ class PolicyValueNet(nn.Module):
         
         # Reshape for 1D convolution: (batch, channels, length)
         # We'll use a fixed length representation
-        self.conv_input = nn.Conv1d(base_channels * 8, base_channels, kernel_size=1)
+        self.conv_input = nn.Conv1d(base_channels, base_channels, kernel_size=3, padding=1) 
         
         # Residual blocks
         self.residual_blocks = nn.ModuleList([
@@ -133,7 +133,9 @@ class PolicyValueNet(nn.Module):
         
         # Reshape for 1D convolution
         # We'll treat it as a sequence of length 1 with many channels
-        x = x.unsqueeze(2)  # (batch, base_channels * 8, 1)
+        x = x[:, :768]     
+        x = x.view(batch_size, 128, 6)   
+        # x = x.unsqueeze(2)  # (batch, base_channels * 8, 1) 
         x = self.conv_input(x)  # (batch, base_channels, 1)
         
         # Apply residual blocks
