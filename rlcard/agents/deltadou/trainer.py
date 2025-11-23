@@ -418,10 +418,6 @@ class DeltaDouTrainer:
         
         print(f"Collected {sum(len(r) for r in self.reservoir)} training samples")
         
-        # Save bootstrap training data
-        self.save_bootstrap_data()
-        print("Bootstrap training data saved!")
-        
         # Train initial networks
         print("Training initial networks...")
         for epoch in tqdm(range(100), desc="Initial training"):
@@ -560,21 +556,7 @@ class DeltaDouTrainer:
         
         # Bootstrap phase
         if not skip_bootstrap and start_episode == 0:
-            # Try to load existing bootstrap data first (unless forced to regenerate)
-            if not force_bootstrap and self.load_bootstrap_data():
-                print("Using existing bootstrap data, skipping data collection...")
-                # Train initial networks with loaded data
-                print("Training initial networks...")
-                for epoch in tqdm(range(100), desc="Initial training"):
-                    self._train_networks()
-                # Save initial models
-                self.save_models(episode=0)
-                print("Bootstrap phase completed (using saved data)!")
-            else:
-                # No saved data or forced regeneration, run full bootstrap
-                if force_bootstrap:
-                    print("Force regenerating bootstrap data...")
-                self.bootstrap_phase()
+            self.bootstrap_phase()
         elif start_episode > 0:
             self.load_models(start_episode - 1)
         

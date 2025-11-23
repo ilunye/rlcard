@@ -56,8 +56,8 @@ if __name__ == '__main__':
                         help='Number of games per self-play episode (default: 8000)')
     parser.add_argument('--num_episodes', type=int, default=100,
                         help='Number of self-play episodes (default: 100)')
-    parser.add_argument('--bootstrap_games', type=int, default=200000,
-                        help='Number of bootstrap games with heuristic (default: 200000)')
+    parser.add_argument('--bootstrap_games', type=int, default=21000,
+                        help='Number of bootstrap games with heuristic (default: 21000)')
     parser.add_argument('--fpmcts_simulations', type=int, default=400,
                         help='Number of FPMCTS simulations per search (default: 400)')
     parser.add_argument('--inference_threshold', type=int, default=15,
